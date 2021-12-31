@@ -1,0 +1,115 @@
+---
+- name: Install ClamAV on RHEL8 playbook
+  hosts: target_node
+  vars:
+    clamav_scans_per_day: 1
+    clamav_packages:
+      - clamav
+      - clamav-data
+      - clamav-filesystem
+      - clamav-lib
+      - libprelude
+      - libtool-ltdl
+    home_user: ansible
+
+  tasks:
+    - name: RPM KEY Epel repo
+      rpm_key:
+        key: https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-8
+        state: present
+
+    - name: Install EPEL Repo
+      yum_repository:
+        name: control-epel
+        description: rhel-8-for-x86_64-epel from control node
+        file: control-epel
+        baseurl: https://dl.fedoraproject.org/pub/epel/8/Everything/x86_64/
+        gpgcheck: yes
+        enabled: yes
+
+    - name: Show enabled repo's
+      command: yum repolist --enabled
+      register: result_repos_enabled
+      args:
+        warn: false
+
+    - name: Print enabled repos
+      debug:
+        msg: "{{ result_repos_enabled.stdout_lines }}"
+
+    - name: Download clamav and dependiencies to specific dir
+      command:  "/usr/bin/yumdownloader clamav --destdir /home/{{ home_user }}/clamav_dir --resolve"
+      register: result_clamav
+
+    - name: Print result yumdownload for clamav
+      debug:
+        msg: "{{ result_clamav.stdout_lines }}"
+
+    - name: Set user on clamav_dir
+      file:
+        path: "/home/{{ home_user }}/clamav_dir"
+        state: directory
+        recurse: yes
+        owner: "{{ home_user }}"
+        group: "{{ home_user }}"
+
+    - name: Install ClamAV
+      dnf:
+        name: clamav,clamd,clamav-update
+        state: latest
+
+    - name: Update package facts
+      package_facts:
+        manager: auto
+
+    - name: Show package facts for clamav
+      debug:
+        var: ansible_facts.packages[ '{{ item }}' ]
+      when: item in ansible_facts.packages
+      loop:
+        - clamav
+        - clamd
+        - clamav-update
+
+    - name: Configure SElinux for ClamAV
+      seboolean:
+        name: antivirus_can_scan_system
+        state: yes
+        persistent: yes
+
+    - name: Download latest Signature for ClamAV
+      command: freshclam
+      args:
+        warn: false
+      register: result_dl_sig
+
+    - name: Print result Download
+      debug:
+        msg: "{{ result_dl_sig.stdout_lines }}"
+
+    - name: ClamAV configuration
+      lineinfile:
+        path: /etc/clamd.d/scan.conf
+        regexp: '^#LocalSocket '
+        line: LocalSocket /run/clamd.scan/clamd.sock
+
+    - name: Create ClamAV Systemd Service
+      template:
+        src: templates/freshclam.service.j2
+        dest: /usr/lib/systemd/system/freshclam.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Force systemd to reread configs (2.4 and above)
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start service clamd and freshclam
+      systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      loop:
+        - clamd@scan
+        - freshclam

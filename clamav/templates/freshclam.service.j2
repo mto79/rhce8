@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+[Unit]
+Description = ClamAV Scanner
+After = network.target
+
+[Service]
+Type = forking
+# if you want to scan more than one in a day change the number 1 with your desired number in below line.
+ExecStart = /usr/bin/freshclam -d -c {{ clamav_scans_per_day }}
+Restart = on-failure
+PrivateTmp =true
+
+[Install]
+WantedBy=multi-user.target
